@@ -360,7 +360,7 @@ ErrorCode TunServiceConfig::handleConfigRequest(EIBnet_ConfigRequest &r1)
           int objno = r1.CEMI[3];
           int prop = r1.CEMI[4];
           int count = (r1.CEMI[5] >> 4) & 0x0f;
-          int start = (r1.CEMI[5] & 0x0f) | r1.CEMI[6];
+          int start = ((r1.CEMI[5] & 0x0f) << 8) | r1.CEMI[6];
           res.resize(1);
           res[0] = 0;
           if (obj == 0 && objno == 0)
@@ -371,6 +371,15 @@ ErrorCode TunServiceConfig::handleConfigRequest(EIBnet_ConfigRequest &r1)
                   res[0] = 0;
                   res[1] = 0;
                   start = 0;
+                }
+              else if (prop == 56) // PID_MAX_APDULENGTH
+                {
+                  res.resize(2);
+                  res[0] = 0;
+                  if (start == 0)
+                    res[1] = 1; // number of elements
+                  else
+                    res[1] = 23; // max APDU: TP1 extended frame via TPUART
                 }
               else
                 count = 0;
