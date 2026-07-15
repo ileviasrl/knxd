@@ -982,8 +982,25 @@ Router::checkGroupAddress (eibaddr_t addr, LinkConnectPtr link) const
 }
 
 eibaddr_t
-Router::get_client_addr (TracePtr t)
+Router::get_client_addr (TracePtr t, eibaddr_t requested)
 {
+  if (requested != 0 &&
+      requested >= client_addrs_start &&
+      requested < client_addrs_start + client_addrs_len)
+    {
+      unsigned int pos = requested - client_addrs_start;
+      LinkConnectPtr link = nullptr;
+      if (!client_addrs[pos] && requested != addr &&
+          !hasAddress (requested, link, true))
+        {
+          TRACEPRINTF (t, 3, "Allocate requested %s", FormatEIBAddr (requested));
+          client_addrs[pos] = true;
+          return requested;
+        }
+      TRACEPRINTF (t, 3, "Requested %s not available", FormatEIBAddr (requested));
+      return 0;
+    }
+
   /*
    * Start allocating after the last-assigned address.
    * This leaves a buffer for delayed replies so that they don't get sent

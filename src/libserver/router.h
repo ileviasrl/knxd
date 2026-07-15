@@ -120,7 +120,7 @@ public:
   bool deregisterVBusmonitor (L_Busmonitor_CallBack * c);
 
   /** Get a free dynamic address */
-  eibaddr_t get_client_addr (TracePtr t);
+  eibaddr_t get_client_addr (TracePtr t, eibaddr_t requested = 0);
   /** … and release it */
   void release_client_addr (eibaddr_t addr);
 

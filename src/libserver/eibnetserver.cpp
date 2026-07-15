@@ -697,9 +697,10 @@ EIBnetServer::handle_packet (EIBNetIPPacket *p1, EIBNetIPSocket *isock)
           goto out;
         }
       r2.status = E_CONNECTION_TYPE;
-      if (r1.CRI.size() == 3 && r1.CRI[0] == 4)
+      if ((r1.CRI.size() == 3 || r1.CRI.size() == 5) && r1.CRI[0] == 4)
         {
-          eibaddr_t a = tunnel ? static_cast<Router &>(router).get_client_addr (t) : 0;
+          eibaddr_t req = (r1.CRI.size() == 5) ? ((r1.CRI[3] << 8) | r1.CRI[4]) : 0;
+          eibaddr_t a = tunnel ? static_cast<Router &>(router).get_client_addr (t, req) : 0;
           r2.CRD.resize (3);
           r2.CRD[0] = 0x04;
           if (tunnel)
