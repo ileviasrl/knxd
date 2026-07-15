@@ -1033,7 +1033,7 @@ void ConnState::config_request(EIBnet_ConfigRequest &r1, EIBNetIPSocket *isock)
               int start = ((r1.CEMI[5] & 0x0f) << 8) | r1.CEMI[6];
               res.resize (1);
               res[0] = 0;
-              if (obj == 0 && objno == 0)
+              if (obj == 0 && objno <= 1)
                 {
                   if (prop == 0)
                     {
@@ -1050,6 +1050,23 @@ void ConnState::config_request(EIBnet_ConfigRequest &r1, EIBNetIPSocket *isock)
                         res[1] = 1; // number of elements
                       else
                         res[1] = 248; // max APDU: TP1 extended frame via TPUART
+                    }
+                  else
+                    count = 0;
+                }
+              else if (obj == 8 && objno <= 1) // cEMI Server Object
+                {
+                  if (prop == 51) // PID_MEDIUM_TYPE
+                    {
+                      res.resize (2);
+                      res[0] = 0;
+                      res[1] = (start == 0) ? 1 : 0x02; // TP1
+                    }
+                  else if (prop == 68 || prop == 69) // MAX_INTERFACE/LOCAL_APDU_LENGTH
+                    {
+                      res.resize (2);
+                      res[0] = 0;
+                      res[1] = (start == 0) ? 1 : 248;
                     }
                   else
                     count = 0;
