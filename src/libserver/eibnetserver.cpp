@@ -1049,7 +1049,7 @@ void ConnState::config_request(EIBnet_ConfigRequest &r1, EIBNetIPSocket *isock)
                       if (start == 0)
                         res[1] = 1; // number of elements
                       else
-                        res[1] = 23; // max APDU: TP1 extended frame via TPUART
+                        res[1] = 248; // max APDU: TP1 extended frame via TPUART
                     }
                   else
                     count = 0;
