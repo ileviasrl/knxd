@@ -1,0 +1,50 @@
+name: Compile & Publish Release
+
+on:
+  release:
+    types: [published] # Trigger automatically on a new release
+  workflow_dispatch:    # Adds a manual run button in the Actions tab!
+
+permissions:
+  contents: write # Grants permissions to attach files back to your release
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get dist-upgrade -y
+          sudo apt-get install -y --no-install-recommends libusb-1.0-0-dev libsystemd-dev libev-dev libfmt-dev libinih-dev
+
+      - name: Checkout Main Project
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Full history to be able to determine version number
+
+      - name: Bootstrap
+        run: sh bootstrap.sh
+
+      - name: Configure
+        run: ./configure
+
+      - name: Build
+        run: make -j$(nproc)
+
+      - name: Organize Binaries
+        run: |
+          mkdir -p build-output
+          cp src/server/knxd build-output/knxd
+          cp src/tools/knxtool build-output/knxtool
+        shell: bash
+
+      - name: Upload Binaries to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            build-output/knxd
+            build-output/knxtool
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
