@@ -25,22 +25,16 @@ jobs:
           distro: ubuntu_latest
           githubToken: ${{ secrets.GITHUB_TOKEN }}
           
-          setup: |
-            mkdir -p "${PWD}/build-output"
-            
           run: |
-            # Install build tools inside the ARM virtual environment
             apt-get update
             apt-get install -y --no-install-recommends \
-              build-essential autoconf libtool pkg-config \
+              build-essential autoconf libtool pkg-config git \
               libusb-1.0-0-dev libsystemd-dev libev-dev libfmt-dev libinih-dev
             
-            # Run the build natively inside QEMU-emulated ARM
             sh bootstrap.sh
             ./configure
             make -j$(nproc)
             
-            # Copy output binaries
             mkdir -p build-output
             cp src/server/knxd build-output/knxd
             cp src/tools/knxtool build-output/knxtool
