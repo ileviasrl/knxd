@@ -10,41 +10,46 @@ permissions:
 
 jobs:
   build-and-release:
-    runs-on: ubuntu-latest-arm64
+    runs-on: ubuntu-latest
 
     steps:
-      - name: Install build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get dist-upgrade -y
-          sudo apt-get install -y --no-install-recommends libusb-1.0-0-dev libsystemd-dev libev-dev libfmt-dev libinih-dev
-
       - name: Checkout Main Project
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # Full history to be able to determine version number
+          fetch-depth: 0
 
-      - name: Bootstrap
-        run: sh bootstrap.sh
-
-      - name: Configure
-        run: ./configure
-
-      - name: Build
-        run: make -j$(nproc)
-
-      - name: Organize Binaries
-        run: |
-          mkdir -p build-output
-          cp src/server/knxd build-output/knxd
-          cp src/tools/knxtool build-output/knxtool
-        shell: bash
+      - name: Build inside ARM64 Container
+        uses: uraimo/run-on-arch-action@v2
+        with:
+          arch: aarch64
+          distro: ubuntu_latest
+          githubToken: ${{ secrets.GITHUB_TOKEN }}
+          
+          setup: |
+            mkdir -p "${PWD}/build-output"
+            
+          run: |
+            # Install build tools inside the ARM virtual environment
+            apt-get update
+            apt-get install -y --no-install-recommends \
+              build-essential autoconf libtool pkg-config \
+              libusb-1.0-0-dev libsystemd-dev libev-dev libfmt-dev libinih-dev
+            
+            # Run the build natively inside QEMU-emulated ARM
+            sh bootstrap.sh
+            ./configure
+            make -j$(nproc)
+            
+            # Copy output binaries
+            mkdir -p build-output
+            cp src/server/knxd build-output/knxd-arm64
+            cp src/tools/knxtool build-output/knxtool-arm64
 
       - name: Upload Binaries to Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            build-output/knxd
-            build-output/knxtool
+            build-output/knxd-arm64
+            build-output/knxtool-arm64
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
