@@ -42,14 +42,14 @@ jobs:
             
             # Copy output binaries
             mkdir -p build-output
-            cp src/server/knxd build-output/knxd-arm64
-            cp src/tools/knxtool build-output/knxtool-arm64
+            cp src/server/knxd build-output/knxd
+            cp src/tools/knxtool build-output/knxtool
 
       - name: Upload Binaries to Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            build-output/knxd-arm64
-            build-output/knxtool-arm64
+            build-output/knxd
+            build-output/knxtool
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
