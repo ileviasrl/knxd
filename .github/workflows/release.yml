@@ -31,6 +31,8 @@ jobs:
               build-essential autoconf libtool pkg-config git \
               libusb-1.0-0-dev libsystemd-dev libev-dev libfmt-dev libinih-dev
             
+            git config --global --add safe.directory '*'
+
             sh bootstrap.sh
             ./configure
             make -j$(nproc)
