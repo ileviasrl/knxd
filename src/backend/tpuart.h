@@ -19,6 +19,8 @@
 
 #ifndef TPUART_H
 #define TPUART_H
+#include <unordered_set>
+#include <cstdint>
 #include "iobuf.h"
 #include "eibnetip.h"
 #include "link.h"
@@ -67,6 +69,9 @@ protected:
 
   bool ackallgroup;
   bool ackallindividual;
+  bool ack_filter_active = false;
+  std::unordered_set<uint16_t> ack_filter_group;
+  std::unordered_set<uint16_t> ack_filter_indiv;
 
   /** process a received frame */
   virtual void RecvLPDU (const uint8_t * data, int len);

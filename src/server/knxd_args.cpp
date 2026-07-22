@@ -35,6 +35,7 @@ struct L2options
 {
   unsigned int flags;
   unsigned int send_delay;
+  std::string ack_filter_file;
   TracePtr t;
 };
 
@@ -57,6 +58,7 @@ struct L2options
 #define OPT_SINGLE_PORT 9
 #define OPT_MULTI_PORT 10
 #define OPT_NO_TIMESTAMP 11
+#define OPT_ACK_FILTER 12
 
 #define OPT_ARG(_arg,_state,_default) (_arg ? _arg : \
         (state->argv[state->next] && state->argv[state->next][0] && (state->argv[state->next][0] != '-')) ?  \
@@ -187,6 +189,8 @@ public:
       (*ini[section])["ack-group"] = "true";
     if (l2opts.flags & FLAG_B_TPUARTS_ACKINDIVIDUAL)
       (*ini[section])["ack-individual"] = "true";
+    if (!l2opts.ack_filter_file.empty())
+      (*ini[section])["ack-filter-file"] = l2opts.ack_filter_file;
     if (l2opts.flags & FLAG_B_TPUARTS_DISCH_RESET)
       (*ini[section])["reset"] = "true";
     if (l2opts.flags & FLAG_B_NO_MONITOR)
@@ -445,6 +449,10 @@ static struct argp_option options[] =
     "tpuarts backend should generate L2 acks for all individual telegrams"
   },
   {
+    "ack-filter", OPT_ACK_FILTER, "FILE", 0,
+    "tpuarts backend: generate L2 acks ONLY for the KNX addresses listed in FILE"
+  },
+  {
     "tpuarts-disch-reset", OPT_BACK_TPUARTS_DISCH_RESET, 0, 0,
     "tpuarts backend should should use a full interface reset (for Disch TPUART interfaces)"
   },
@@ -662,6 +670,9 @@ parse_opt (int key, char *arg, struct argp_state *state)
       break;
     case OPT_BACK_TPUARTS_ACKINDIVIDUAL:
       arguments->l2opts.flags |= FLAG_B_TPUARTS_ACKINDIVIDUAL;
+      break;
+    case OPT_ACK_FILTER:
+      arguments->l2opts.ack_filter_file = arg;
       break;
     case OPT_BACK_TPUARTS_DISCH_RESET:
       arguments->l2opts.flags |= FLAG_B_TPUARTS_DISCH_RESET;

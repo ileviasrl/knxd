@@ -30,6 +30,9 @@
 #include "lltcp.h"
 #include "log.h"
 #include "cm_tp1.h"
+#include <fstream>
+#include <string>
+#include <cstdio>
 
 /* add formatter for fmt >= 10.0.0 */
 int format_as(LPDU_Type t) { return t; }
@@ -125,6 +128,39 @@ TPUARTwrap::setup()
 {
   ackallgroup = cfg->value("ack-group",false);
   ackallindividual = cfg->value("ack-individual",false);
+  {
+    std::string aff = cfg->value("ack-filter-file", "");
+    if (!aff.empty())
+      {
+        std::ifstream fin(aff);
+        if (!fin)
+          ERRORPRINTF(t, E_ERROR | 44, "ack-filter-file: impossibile aprire %s", aff.c_str());
+        else
+          {
+            std::string line; int n = 0;
+            while (std::getline(fin, line))
+              {
+                size_t h = line.find('#'); if (h != std::string::npos) line = line.substr(0, h);
+                size_t a = line.find_first_not_of(" \t\r\n"); if (a == std::string::npos) continue;
+                size_t b = line.find_last_not_of(" \t\r\n");
+                std::string tok = line.substr(a, b - a + 1);
+                int x, y, z;
+                if (sscanf(tok.c_str(), "%d/%d/%d", &x, &y, &z) == 3)
+                  ack_filter_group.insert(((x & 0x1f) << 11) | ((y & 0x7) << 8) | (z & 0xff));
+                else if (sscanf(tok.c_str(), "%d/%d", &x, &y) == 2)
+                  ack_filter_group.insert(((x & 0x1f) << 11) | (y & 0x7ff));
+                else if (sscanf(tok.c_str(), "%d.%d.%d", &x, &y, &z) == 3)
+                  ack_filter_indiv.insert(((x & 0xf) << 12) | ((y & 0xf) << 8) | (z & 0xff));
+                else
+                  { ERRORPRINTF(t, E_ERROR | 44, "ack-filter-file: indirizzo non valido '%s'", tok.c_str()); continue; }
+                n++;
+              }
+            ack_filter_active = true;
+            ERRORPRINTF(t, E_INFO | 45, "ack-filter: %d indirizzi (%d gruppo, %d individuali) da %s",
+                        n, (int)ack_filter_group.size(), (int)ack_filter_indiv.size(), aff.c_str());
+          }
+      }
+  }
   monitor = cfg->value("monitor",false);
 
   if (cfg->value("device","").length() > 0)
@@ -389,16 +425,18 @@ TPUARTwrap::in_check()
           else
             {
               uint8_t c = 0x10;
-              if ((in[ext ? 1 : 5] & 0x80) == 0)
-                {
-                  if (ackallindividual || checkSysAddress ((in[3+ext] << 8) | in[4+ext]))
-                    c |= 0x1;
-                }
+              uint16_t ackdst = (in[3+ext] << 8) | in[4+ext];
+              bool ackgrp = (in[ext ? 1 : 5] & 0x80) != 0;
+              bool do_ack;
+              if (ack_filter_active)
+                do_ack = ackgrp ? (ack_filter_group.find(ackdst) != ack_filter_group.end())
+                                : (ack_filter_indiv.find(ackdst) != ack_filter_indiv.end());
+              else if (!ackgrp)
+                do_ack = ackallindividual || checkSysAddress (ackdst);
               else
-                {
-                  if (ackallgroup || checkSysGroupAddress ((in[3+ext] << 8) | in[4+ext]))
-                    c |= 0x1;
-                }
+                do_ack = ackallgroup || checkSysGroupAddress (ackdst);
+              if (do_ack)
+                c |= 0x1;
               TRACEPRINTF (t, 0, "SendAck %02X", c);
               LowLevelIface::send_Data(c);
               acked = true;
