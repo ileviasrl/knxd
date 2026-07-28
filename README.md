@@ -45,6 +45,24 @@ The file format is documented in "doc/inifile.rst". You might want to use
 the program "/usr/lib/knxd\_args" to create it from previous versions'
 command-line arguments.
 
+### Dynamic Ack-Filter Control
+
+The ``TPUART``/``NCN5120`` backends support an optional "virtual ack" filter
+that suppresses the low-level bus acknowledgement for a configurable list of
+KNX group/individual addresses:
+
+* ``ack-filter-file`` loads a static list of addresses from a file once, at
+  startup.
+* ``ack-filter-socket`` opens a small Unix domain control socket so another
+  process can add, remove, or clear addresses at runtime, without restarting
+  knxd.
+
+Both are entirely optional: if neither option is configured, or nothing ever
+connects to the socket, knxd behaves exactly as it always has. See
+``doc/inifile.rst`` for the configuration keys and the binary wire protocol
+used by ``ack-filter-socket``; a reference client and protocol README live in
+``contrib/ack-filter/``.
+
 ### Backward Compatibility
 
 The default Unix socket is ``/run/knx``.

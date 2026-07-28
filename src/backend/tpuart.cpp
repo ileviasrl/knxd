@@ -33,9 +33,46 @@
 #include <fstream>
 #include <string>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <cstddef>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <sys/uio.h>
+#include <sys/stat.h>
 
 /* add formatter for fmt >= 10.0.0 */
 int format_as(LPDU_Type t) { return t; }
+
+/* --- dynamic ack-filter control socket: wire format -----------------------
+ *
+ * One UDP-like datagram (AF_UNIX, SOCK_DGRAM) holds 1..N fixed 4-byte
+ * records, applied in order:
+ *
+ *   byte 0: opcode (see ACK_OP_* below)
+ *   byte 1: flag (only used by ACK_OP_SET_ENABLED; must be 0 otherwise)
+ *   byte 2: address, high byte (big-endian, packed 16 bit KNX address)
+ *   byte 3: address, low byte
+ *
+ * A datagram whose length isn't a multiple of 4, or that was truncated
+ * (MSG_TRUNC), is dropped in its entirety -- never applied partially, so
+ * the filter state can never desync from a malformed message. Unknown
+ * opcodes are skipped (that one record only) so a batch keeps applying.
+ * There is no reply and no handshake: this is a fire-and-forget control
+ * channel, safe to leave permanently unused.
+ */
+static const uint8_t ACK_OP_NOP          = 0x00;
+static const uint8_t ACK_OP_ADD_GROUP    = 0x01;
+static const uint8_t ACK_OP_DEL_GROUP    = 0x02;
+static const uint8_t ACK_OP_CLEAR_GROUP  = 0x03;
+static const uint8_t ACK_OP_ADD_INDIV    = 0x11;
+static const uint8_t ACK_OP_DEL_INDIV    = 0x12;
+static const uint8_t ACK_OP_CLEAR_INDIV  = 0x13;
+static const uint8_t ACK_OP_CLEAR_ALL    = 0x20;
+static const uint8_t ACK_OP_SET_ENABLED  = 0x21;
+
+static const size_t ACK_SOCK_BUFSZ = 8192;             // 2048 records/datagram
+static const int ACK_SOCK_MAX_DGRAMS_PER_CB = 32;       // event-loop starvation guard
 
 class TPUARTserial : public LLserial
 {
@@ -161,6 +198,29 @@ TPUARTwrap::setup()
           }
       }
   }
+  {
+    std::string asp = cfg->value("ack-filter-socket", "");
+    if (!asp.empty())
+      {
+        std::string modestr = cfg->value("ack-filter-socket-mode", "0660");
+        char *end = nullptr;
+        unsigned long mode = strtoul(modestr.c_str(), &end, 8);
+        if (end == modestr.c_str() || mode > 0777)
+          {
+            ERRORPRINTF(t, E_WARNING | 160, "ack-filter-socket-mode '%s' non valido, uso 0660", modestr.c_str());
+            mode = 0660;
+          }
+        // A live control socket means an external process is expected to
+        // decide who gets acked; fail safe by acking nobody until told
+        // otherwise, rather than silently falling back to ack-group /
+        // ack-individual / checkSysAddress while the companion process
+        // is still starting up (or never starts at all).
+        if (ack_filter_socket_setup(asp, (unsigned int)mode))
+          ack_filter_active = true;
+        // on failure, ack_filter_socket_setup() already logged why;
+        // the feature just stays disabled and knxd continues normally.
+      }
+  }
   monitor = cfg->value("monitor",false);
 
   if (cfg->value("device","").length() > 0)
@@ -207,6 +267,197 @@ TPUARTwrap::~TPUARTwrap ()
 
   timer.stop();
   sendtimer.stop();
+  ack_filter_socket_stop();
+}
+
+bool
+TPUARTwrap::ack_filter_socket_setup(const std::string &path, unsigned int mode)
+{
+  bool abstract = (!path.empty() && path[0] == '@');
+  const std::string &name = abstract ? path.substr(1) : path;
+
+  struct sockaddr_un sa;
+  memset(&sa, 0, sizeof(sa));
+  sa.sun_family = AF_UNIX;
+
+  // +1 for the trailing NUL (filesystem path) or the leading NUL (abstract)
+  if (name.size() + 1 > sizeof(sa.sun_path))
+    {
+      ERRORPRINTF(t, E_WARNING | 161, "ack-filter-socket: path troppo lungo: %s", path.c_str());
+      return false;
+    }
+
+  socklen_t alen;
+  if (abstract)
+    {
+      // Linux abstract namespace: sun_path[0] == '\0', no filesystem entry,
+      // no stale-socket cleanup needed, name vanishes when we close the fd.
+      memcpy(sa.sun_path + 1, name.data(), name.size());
+      alen = (socklen_t)(offsetof(struct sockaddr_un, sun_path) + 1 + name.size());
+    }
+  else
+    {
+      memcpy(sa.sun_path, name.data(), name.size());
+      alen = sizeof(sa);
+    }
+
+  int fd = socket(AF_UNIX, SOCK_DGRAM, 0);
+  if (fd == -1)
+    {
+      ERRORPRINTF(t, E_WARNING | 162, "ack-filter-socket: socket: %s", strerror(errno));
+      return false;
+    }
+  fcntl(fd, F_SETFD, FD_CLOEXEC);
+  set_non_blocking(fd);
+
+  if (bind(fd, (struct sockaddr *)&sa, alen) == -1)
+    {
+      bool bound = false;
+      if (errno == EADDRINUSE && !abstract)
+        {
+          // Possibly a leftover socket file from a crashed knxd; probe it
+          // the same way LocalServer does before stealing/removing it.
+          int probe = socket(AF_UNIX, SOCK_DGRAM, 0);
+          if (probe != -1)
+            {
+              if (connect(probe, (struct sockaddr *)&sa, alen) == -1 && errno == ECONNREFUSED)
+                {
+                  ::unlink(name.c_str());
+                  if (bind(fd, (struct sockaddr *)&sa, alen) == 0)
+                    bound = true;
+                }
+              close(probe);
+            }
+        }
+      if (!bound)
+        {
+          ERRORPRINTF(t, E_WARNING | 162, "ack-filter-socket: bind %s: %s", path.c_str(), strerror(errno));
+          close(fd);
+          return false;
+        }
+    }
+
+  if (!abstract && chmod(name.c_str(), (mode_t)mode) == -1)
+    ERRORPRINTF(t, E_WARNING | 163, "ack-filter-socket: chmod %s: %s", path.c_str(), strerror(errno));
+
+  ack_sock_fd = fd;
+  ack_sock_path = abstract ? std::string() : name;
+  ack_sock_io.start(ack_sock_fd, ev::READ);
+  ERRORPRINTF(t, E_INFO | 167, "ack-filter-socket: in ascolto su %s", path.c_str());
+  return true;
+}
+
+void
+TPUARTwrap::ack_filter_socket_stop()
+{
+  if (ack_sock_fd == -1)
+    return;
+  ack_sock_io.stop();
+  close(ack_sock_fd);
+  ack_sock_fd = -1;
+  if (!ack_sock_path.empty())
+    {
+      ::unlink(ack_sock_path.c_str());
+      ack_sock_path.clear();
+    }
+}
+
+void
+TPUARTwrap::ack_filter_apply(const uint8_t *rec)
+{
+  uint16_t addr = ((uint16_t)rec[2] << 8) | rec[3];
+
+  switch (rec[0])
+    {
+    case ACK_OP_NOP:
+      return;
+    case ACK_OP_ADD_GROUP:
+      ack_filter_group.insert(addr);
+      break;
+    case ACK_OP_DEL_GROUP:
+      ack_filter_group.erase(addr);
+      break;
+    case ACK_OP_CLEAR_GROUP:
+      ack_filter_group.clear();
+      break;
+    case ACK_OP_ADD_INDIV:
+      ack_filter_indiv.insert(addr);
+      break;
+    case ACK_OP_DEL_INDIV:
+      ack_filter_indiv.erase(addr);
+      break;
+    case ACK_OP_CLEAR_INDIV:
+      ack_filter_indiv.clear();
+      break;
+    case ACK_OP_CLEAR_ALL:
+      // Empties the lists but stays in filter mode (i.e. acks nothing
+      // afterwards) -- it must never widen acking back to "everything",
+      // which is what would happen if this fell back to ack-group /
+      // ack-individual. Use ACK_OP_SET_ENABLED to explicitly leave
+      // filter mode.
+      ack_filter_group.clear();
+      ack_filter_indiv.clear();
+      break;
+    case ACK_OP_SET_ENABLED:
+      ack_filter_active = (rec[1] != 0);
+      TRACEPRINTF(t, 3, "ack-filter %s via socket", ack_filter_active ? "enabled" : "disabled");
+      return;
+    default:
+      ERRORPRINTF(t, E_WARNING | 166, "ack-filter-socket: opcode sconosciuto 0x%02X, record ignorato", rec[0]);
+      return;
+    }
+
+  TRACEPRINTF(t, 8, "ack-filter-socket: op 0x%02X addr %04X -> group=%zu indiv=%zu",
+              rec[0], addr, ack_filter_group.size(), ack_filter_indiv.size());
+}
+
+void
+TPUARTwrap::ack_sock_read_cb(ev::io &, int)
+{
+  uint8_t buf[ACK_SOCK_BUFSZ];
+
+  for (int guard = 0; guard < ACK_SOCK_MAX_DGRAMS_PER_CB; guard++)
+    {
+      struct iovec iov;
+      iov.iov_base = buf;
+      iov.iov_len = sizeof(buf);
+      struct msghdr mh;
+      memset(&mh, 0, sizeof(mh));
+      mh.msg_iov = &iov;
+      mh.msg_iovlen = 1;
+
+      ssize_t n = recvmsg(ack_sock_fd, &mh, 0);
+      if (n < 0)
+        {
+          if (errno == EINTR)
+            {
+              guard--;
+              continue;
+            }
+          if (errno == EAGAIN || errno == EWOULDBLOCK)
+            return; // queue drained, normal case
+          ERRORPRINTF(t, E_WARNING | 164, "ack-filter-socket: recv: %s", strerror(errno));
+          return; // never close the fd, never spin -- just try again next time
+        }
+      if (n == 0)
+        continue; // legal no-op datagram
+
+      if (mh.msg_flags & MSG_TRUNC)
+        {
+          ERRORPRINTF(t, E_WARNING | 165, "ack-filter-socket: datagram troppo grande (> %zu byte), scartato", ACK_SOCK_BUFSZ);
+          continue;
+        }
+      if ((n % 4) != 0)
+        {
+          ERRORPRINTF(t, E_WARNING | 165, "ack-filter-socket: lunghezza %zd non multipla di 4, scartato", n);
+          continue;
+        }
+
+      for (ssize_t i = 0; i < n; i += 4)
+        ack_filter_apply(buf + i);
+    }
+  // guard hit: remaining datagrams, if any, are handled on the next
+  // loop iteration (the watcher is level-triggered).
 }
 
 void
@@ -324,6 +575,7 @@ TPUARTwrap::TPUARTwrap(LowLevelIface* parent, IniSectionPtr& s, LowLevelDriver* 
 {
   timer.set <TPUARTwrap,&TPUARTwrap::timer_cb> (this);
   sendtimer.set <TPUARTwrap,&TPUARTwrap::sendtimer_cb> (this);
+  ack_sock_io.set <TPUARTwrap,&TPUARTwrap::ack_sock_read_cb> (this);
 }
 
 void

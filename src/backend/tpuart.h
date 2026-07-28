@@ -21,6 +21,7 @@
 #define TPUART_H
 #include <unordered_set>
 #include <cstdint>
+#include <string>
 #include "iobuf.h"
 #include "eibnetip.h"
 #include "link.h"
@@ -72,6 +73,29 @@ protected:
   bool ack_filter_active = false;
   std::unordered_set<uint16_t> ack_filter_group;
   std::unordered_set<uint16_t> ack_filter_indiv;
+
+  /* --- dynamic ack-filter control socket -------------------------------
+   *
+   * Optional companion to ack-filter-file: lets an external process add,
+   * remove, or clear ack_filter_group/ack_filter_indiv entries at runtime
+   * by sending small fixed-size binary datagrams to a Unix domain socket
+   * (see ack_filter_apply() in tpuart.cpp for the wire format). Entirely
+   * optional -- if "ack-filter-socket" isn't configured, or no client
+   * ever sends anything, knxd behaves exactly as it always has.
+   *
+   * ack_sock_read_cb() and in_check() (which reads ack_filter_group /
+   * ack_filter_indiv) both run as callbacks on the same single-threaded
+   * libev loop, so mutating the sets here is inherently race-free. Do
+   * NOT move this to a real OS thread -- that would require locking
+   * these sets everywhere they're touched.
+   */
+  int ack_sock_fd = -1;
+  std::string ack_sock_path; // filesystem path to unlink on shutdown; empty if none to unlink
+  ev::io ack_sock_io;
+  void ack_sock_read_cb(ev::io &w, int revents);
+  bool ack_filter_socket_setup(const std::string &path, unsigned int mode);
+  void ack_filter_socket_stop();
+  void ack_filter_apply(const uint8_t *rec);
 
   /** process a received frame */
   virtual void RecvLPDU (const uint8_t * data, int len);

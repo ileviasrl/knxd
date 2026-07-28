@@ -751,6 +751,81 @@ Some drivers accept these options.
 
   Optional; default false.
 
+* ack-filter-file (string)
+
+  Path to a text file listing the group and/or individual addresses
+  knxd should send a bus-level ("virtual") ack for, one address per
+  line. Group addresses may be written in 2-level (``1/2``) or 3-level
+  (``1/2/3``) form; individual/physical addresses use ``1.2.3``. Blank
+  lines and ``#`` comments are ignored.
+
+  Once this option is set (to a file that opens successfully), knxd
+  stops using ``ack-group`` / ``ack-individual`` / its normal "is this
+  address mine" checks to decide whether to ack a frame, and instead
+  acks only the addresses listed here -- everything else goes
+  unacked, exactly as if no device were present.
+
+  The file is read once at startup. To change the list while knxd is
+  running, see ``ack-filter-socket`` below, which adds to / removes
+  from / clears the very same list.
+
+  This option only applies to drivers which directly connect to a
+  twisted-pair KNX wire.
+
+  Optional; default unset (falls back to ``ack-group`` / ``ack-individual``).
+
+* ack-filter-socket (string)
+
+  Path to a Unix domain socket (``SOCK_DGRAM``) that knxd binds and
+  listens on for small binary commands that add, remove, or clear
+  entries in the same virtual-ack address list ``ack-filter-file``
+  seeds -- while knxd keeps running, without a restart. This is meant
+  to be driven by a companion process the operator runs alongside
+  knxd (for example, a controller that knows at runtime which virtual
+  devices are currently active and should be acked for).
+
+  Setting this option puts the driver into the same "only ack listed
+  addresses" mode as ``ack-filter-file``, starting from whatever
+  ``ack-filter-file`` seeded (nothing, if that option isn't also
+  set) -- deliberately fail-safe, so knxd never acks on behalf of a
+  virtual device that the companion process hasn't (yet) told it
+  about.
+
+  Sending anything on this socket is entirely optional: if no
+  companion process ever runs, or it never sends a message, knxd
+  behaves exactly as it would with a plain ``ack-filter-file`` (or,
+  if that's unset too, an always-empty list -- acking nothing, which
+  is why most deployments set at least one of the two).
+
+  Wire format: each datagram is 1 or more fixed 4-byte records
+  (``opcode``, ``flag``, ``address-high``, ``address-low``, the
+  address big-endian and packed the same way knxd stores it
+  internally: 3-level group ``(main<<11)|(mid<<8)|sub``, 2-level
+  group ``(main<<11)|sub``, individual ``(area<<12)|(line<<8)|device``).
+  Malformed datagrams (wrong length, or larger than knxd's 8 KiB
+  receive buffer) are dropped whole and logged; a "clear" command
+  empties the list but does *not* revert to ``ack-group`` /
+  ``ack-individual`` behaviour. See ``ack_filter_apply()`` in
+  ``src/backend/tpuart.cpp`` for the authoritative opcode list, and
+  the companion C# client shipped alongside this option for a
+  ready-to-use implementation.
+
+  No reply is ever sent back on this socket.
+
+  This option only applies to drivers which directly connect to a
+  twisted-pair KNX wire.
+
+  Optional; default unset (feature disabled).
+
+* ack-filter-socket-mode (string, octal)
+
+  File mode applied (via ``chmod``) to the ``ack-filter-socket`` path
+  right after it's created, so a companion process running as a
+  different user/group can reach it. Has no effect if
+  ``ack-filter-socket`` is unset.
+
+  Optional; default ``"0660"``.
+
 * reset (bool; ``--tpuarts-disch-reset``)
 
   Reset the device while connecting to it. This also affects
