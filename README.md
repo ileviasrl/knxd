@@ -244,6 +244,63 @@ If you would like to submit patches for Mac OSX or Windows, go ahead
 and create a pull request, but please be prepared to maintain your code.
 
 
+### Building this fork for production
+
+This is the ``ileviasrl/knxd`` fork (adds ``ack-filter-file`` / ``ack-filter-socket``,
+see the *Dynamic Ack-Filter Control* section above). It's deployed as a native build
+on the target device itself -- there's no cross-compilation toolchain set up in this
+repo, and knxd links against the target's libc/libev/libfmt/libsystemd, so build it
+directly on a machine with the same architecture and distro as your target.
+
+**1. Install build dependencies** (Debian/Ubuntu; adjust package manager for other
+distros):
+
+    sudo apt-get update
+    sudo apt-get install -y build-essential git autoconf automake libtool \
+        pkg-config libev-dev libfmt-dev libsystemd-dev libusb-1.0-0-dev
+
+    # libfmt-dev is optional -- if missing, knxd's build process downloads and
+    # builds libfmt itself. libusb-1.0-0-dev is only needed for USB backends.
+
+**2. Clone and configure:**
+
+    git clone https://github.com/ileviasrl/knxd.git
+    cd knxd
+    git checkout main          # this fork's default branch
+    sh bootstrap.sh
+    ./configure --prefix=/usr
+
+    # this is the exact configure invocation verified working against the
+    # knxd.service unit used in production (see systemd/knxd.service.in and
+    # /etc/systemd/system/knxd.service on the target). Run "./configure --help"
+    # to see every available option if you need something different (e.g. a
+    # non-systemd init system, or to disable a backend you don't need).
+
+**3. Build:**
+
+    make -j$(nproc)
+
+**4. Install:**
+
+    sudo make install
+
+    # If you're updating a *running* knxd (systemd has the binary open/mapped),
+    # a direct "make install" can fail with "Text file busy" on /usr/bin/knxd.
+    # Safer manual swap-in used for the BAServer deployment:
+    #   sudo cp src/server/knxd /usr/bin/knxd.new
+    #   sudo mv /usr/bin/knxd.new /usr/bin/knxd   # mv is an atomic rename
+    #   sudo systemctl restart knxd.service
+
+**5. Verify:**
+
+    sudo systemctl status knxd.service
+    sudo journalctl -u knxd.service -n 50 --no-pager
+
+If you're only touching ``doc/inifile.rst`` or the ``contrib/ack-filter/`` reference
+files (no C++ changes), you can skip straight to copying them over -- no rebuild
+needed.
+
+
 ### Adding a TPUART USB interface (serial, USB)
 
 If you attach a (properly programmed) TUL (http://busware.de/tiki-index.php?page=TUL) to your computer, it'll show up as ``/dev/ttyACM0``.
