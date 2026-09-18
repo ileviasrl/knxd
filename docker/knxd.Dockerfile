@@ -8,6 +8,15 @@
 
 FROM debian:bullseye AS build
 
+# Bullseye is aging off deb.debian.org's live mirror: exact point-release .deb files
+# (especially for less-mirrored architectures like armhf) start 404ing there before
+# the base image itself catches up. archive.debian.org keeps every package for every
+# architecture indefinitely, so pin sources there instead of the rolling mirror.
+# Archived Release files are also intentionally past their Valid-Until date, so that
+# check has to be disabled too, or every apt-get call fails on "Release file expired".
+RUN printf 'deb http://archive.debian.org/debian bullseye main\ndeb http://archive.debian.org/debian-security bullseye-security main\ndeb http://archive.debian.org/debian bullseye-updates main\n' > /etc/apt/sources.list \
+    && printf 'Acquire::Check-Valid-Until "false";\n' > /etc/apt/apt.conf.d/99no-check-valid-until
+
 # libfmt-dev matters: without it, knxd's configure falls back to tools/get_libfmt,
 # which git-clones fmtlib and builds it with cmake at build time. That makes the build
 # depend on GitHub being reachable and on an unpinned 4.x branch. BAServer's native
