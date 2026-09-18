@@ -1,0 +1,61 @@
+name: Build knxd (ARM cross-compile)
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          # BAServer: Debian 11 bullseye, aarch64.
+          - platform: linux/arm64
+            artifact: knxd-aarch64
+
+          # armhf boards on an older glibc base (e.g. Ubuntu 20.04 Focal / Debian 11
+          # Bullseye, glibc 2.31) that can't be reflashed to a newer OS just for this.
+          - platform: linux/arm/v7
+            artifact: knxd-armhf
+
+    steps:
+      - name: Checkout knxd
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Export as a tar, not "type=local": the staged install tree contains symlinks
+      # (libeibclient.so, the knxtool aliases under libexec/knxd), which a local
+      # export can mishandle depending on the runner/output driver. A tar keeps the
+      # symlinks intact and unpacks correctly on the target with `tar -C / -xf`.
+      - name: Build ${{ matrix.artifact }}
+        run: |
+          docker buildx build \
+            --platform ${{ matrix.platform }} \
+            -f docker/knxd.Dockerfile \
+            --target artifact \
+            --output type=tar,dest=${{ matrix.artifact }}.tar \
+            .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}.tar
+
+      - name: Attach to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ matrix.artifact }}.tar
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
