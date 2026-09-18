@@ -8,41 +8,56 @@
 
 FROM debian:bullseye AS build
 
-# Bullseye's plain `bullseye`/`bullseye-updates` suites are frozen on
-# archive.debian.org (last synced ~2024-08/2025-06) as bullseye ages off the live
-# deb.debian.org mirror. BUT bullseye-security is NOT archived yet -- it's still
-# actively signed and served from deb.debian.org (still gets point releases). The
-# official debian:bullseye image tracks that live security channel, so its baked-in
-# package versions (e.g. libc6, perl-base, libsystemd0) only resolve against
-# archive.debian.org main/updates + deb.debian.org's still-live security repo
-# together -- dropping security entirely (as a prior version of this file did)
-# left no source at all for those exact pinned versions. When bullseye-security
-# does eventually get archived, expect the host to become archive.debian.org with
-# the security suite renamed to the bare codename (that's the pattern archive.debian.org
-# used for buster: see archive.debian.org/debian-security/dists/buster/).
+# Getting a working apt source for bullseye took three failed attempts, so this is
+# spelled out in full:
 #
-# Check-Valid-Until is disabled because the archived Release files are intentionally
-# past their nominal expiry; apt would otherwise refuse to use them.
+# 1. Plain deb.debian.org for everything -> 404s on debian-security .deb files.
+# 2. archive.debian.org for main+updates+security -> archive.debian.org has NO
+#    bullseye-security Release file at all (never mirrored that suite).
+# 3. archive.debian.org main+updates, deb.debian.org for the still-signed
+#    bullseye-security suite -> `apt-get update` succeeds (the Release/Packages
+#    metadata for bullseye-security is still being published, dated ~2026-09-12),
+#    but `apt-get install` 404s on the ACTUAL .deb files under
+#    security.debian.org/.../pool/updates/main/... for exactly the packages this
+#    base image has baked in (libc6-dev, perl, openssl, libsystemd-dev, etc, on
+#    every architecture, not just one). Verified live: the pool has been drained
+#    now that bullseye is past its support window, while the index listing those
+#    filenames hasn't been pruned to match yet.
+#
+# Fix: snapshot.debian.org, pinned to a verified-good timestamp, for all three
+# suites. Unlike the live mirrors, snapshot keeps the actual .deb bytes forever,
+# and this specific timestamp was confirmed (by downloading real package files,
+# not just probing headers) to carry the exact versions already baked into this
+# base image -- so no version pinning or base-image downgrade is needed.
+#
+# Check-Valid-Until is disabled because snapshot's Release files are, by design,
+# long past their nominal expiry; apt would otherwise refuse to use them.
+ARG DEBIAN_SNAPSHOT=20260901T000000Z
 RUN set -eux; \
     printf '%s\n' \
-      'deb http://archive.debian.org/debian bullseye main contrib non-free' \
-      'deb http://archive.debian.org/debian bullseye-updates main contrib non-free' \
-      'deb http://deb.debian.org/debian-security bullseye-security main contrib non-free' \
+      "deb http://snapshot.debian.org/archive/debian/${DEBIAN_SNAPSHOT}/ bullseye main contrib non-free" \
+      "deb http://snapshot.debian.org/archive/debian/${DEBIAN_SNAPSHOT}/ bullseye-updates main contrib non-free" \
+      "deb http://snapshot.debian.org/archive/debian-security/${DEBIAN_SNAPSHOT}/ bullseye-security main contrib non-free" \
       > /etc/apt/sources.list; \
     rm -f /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources 2>/dev/null || true; \
     printf '%s\n' \
       'Acquire::Check-Valid-Until "false";' \
-      'Acquire::Retries "5";' \
-      > /etc/apt/apt.conf.d/99build
+      'Acquire::Retries "8";' \
+      'Acquire::http::Timeout "180";' \
+      'Acquire::http::No-Cache "true";' \
+      > /etc/apt/apt.conf.d/99snapshot
 
 # libfmt-dev matters: without it, knxd's configure falls back to tools/get_libfmt,
 # which git-clones fmtlib and builds it with cmake at build time. That makes the build
 # depend on GitHub being reachable and on an unpinned 4.x branch. BAServer's native
 # build had libfmt-dev installed, so this also keeps the container build faithful.
+# `file` is needed by the CRLF-stripping step further down, not just as a CLI tool.
 #
 # update + install run in the SAME layer deliberately: a cached `apt-get update`
 # from an earlier, now-stale index (e.g. before a mirror rotation) combined with a
 # fresh `install` in a later layer is exactly how the original 404s crept in.
+# snapshot.debian.org is also rate-limited and slow under QEMU emulation -- expect
+# this layer to take several minutes, hence the generous retry/timeout settings above.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential autoconf automake libtool pkg-config cmake \
         libsystemd-dev libusb-1.0-0-dev libev-dev libfmt-dev \
