@@ -8,23 +8,41 @@
 
 FROM debian:bullseye AS build
 
-# Bullseye is aging off deb.debian.org's live mirror: exact point-release .deb files
-# (especially for less-mirrored architectures like armhf) start 404ing there before
-# the base image itself catches up. archive.debian.org keeps every package for every
-# architecture indefinitely, so pin sources there instead of the rolling mirror. Once
-# a release is fully archived there's no separate bullseye-security dist any more
-# (archive.debian.org doesn't mirror debian-security at all -- there's no Release
-# file to fetch) -- its fixes are already folded into bullseye/bullseye-updates in
-# the main archive tree, so only those two lines are needed.
-# Archived Release files are also intentionally past their Valid-Until date, so that
-# check has to be disabled too, or every apt-get call fails on "Release file expired".
-RUN printf 'deb http://archive.debian.org/debian bullseye main\ndeb http://archive.debian.org/debian bullseye-updates main\n' > /etc/apt/sources.list \
-    && printf 'Acquire::Check-Valid-Until "false";\n' > /etc/apt/apt.conf.d/99no-check-valid-until
+# Bullseye's plain `bullseye`/`bullseye-updates` suites are frozen on
+# archive.debian.org (last synced ~2024-08/2025-06) as bullseye ages off the live
+# deb.debian.org mirror. BUT bullseye-security is NOT archived yet -- it's still
+# actively signed and served from deb.debian.org (still gets point releases). The
+# official debian:bullseye image tracks that live security channel, so its baked-in
+# package versions (e.g. libc6, perl-base, libsystemd0) only resolve against
+# archive.debian.org main/updates + deb.debian.org's still-live security repo
+# together -- dropping security entirely (as a prior version of this file did)
+# left no source at all for those exact pinned versions. When bullseye-security
+# does eventually get archived, expect the host to become archive.debian.org with
+# the security suite renamed to the bare codename (that's the pattern archive.debian.org
+# used for buster: see archive.debian.org/debian-security/dists/buster/).
+#
+# Check-Valid-Until is disabled because the archived Release files are intentionally
+# past their nominal expiry; apt would otherwise refuse to use them.
+RUN set -eux; \
+    printf '%s\n' \
+      'deb http://archive.debian.org/debian bullseye main contrib non-free' \
+      'deb http://archive.debian.org/debian bullseye-updates main contrib non-free' \
+      'deb http://deb.debian.org/debian-security bullseye-security main contrib non-free' \
+      > /etc/apt/sources.list; \
+    rm -f /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources 2>/dev/null || true; \
+    printf '%s\n' \
+      'Acquire::Check-Valid-Until "false";' \
+      'Acquire::Retries "5";' \
+      > /etc/apt/apt.conf.d/99build
 
 # libfmt-dev matters: without it, knxd's configure falls back to tools/get_libfmt,
 # which git-clones fmtlib and builds it with cmake at build time. That makes the build
 # depend on GitHub being reachable and on an unpinned 4.x branch. BAServer's native
 # build had libfmt-dev installed, so this also keeps the container build faithful.
+#
+# update + install run in the SAME layer deliberately: a cached `apt-get update`
+# from an earlier, now-stale index (e.g. before a mirror rotation) combined with a
+# fresh `install` in a later layer is exactly how the original 404s crept in.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential autoconf automake libtool pkg-config cmake \
         libsystemd-dev libusb-1.0-0-dev libev-dev libfmt-dev \
