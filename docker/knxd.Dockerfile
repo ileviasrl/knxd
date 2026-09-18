@@ -78,6 +78,23 @@ RUN sh bootstrap.sh \
     && make -j"$(nproc)" \
     && make install-strip DESTDIR=/out
 
+# `make install-strip DESTDIR=/out` only captures knxd's OWN build output. It does
+# NOT capture runtime shared libraries that came from apt (libfmt-dev's runtime
+# counterpart, libfmt7) -- those only exist in this build container's system
+# paths, so a plain `tar -C / -xf` of /out on the target never sees them and knxd
+# fails at startup with:
+#   error while loading shared libraries: libfmt.so.7: cannot open shared object file
+# Fix: copy the actual runtime .so files apt installed into /out, at the same
+# multiarch path the target distro itself uses (e.g. /usr/lib/arm-linux-gnueabihf
+# for armhf, /usr/lib/aarch64-linux-gnu for arm64), so extracting the tar onto the
+# target drops them straight into its normal library search path -- no rpath or
+# extra ldconfig config needed, just `ldconfig` after extraction to refresh the
+# cache (the deploy script does this).
+RUN set -eux; \
+    multiarch="$(dpkg-architecture -qDEB_HOST_MULTIARCH)"; \
+    mkdir -p "/out/usr/lib/${multiarch}"; \
+    cp -a /usr/lib/"${multiarch}"/libfmt.so.7* "/out/usr/lib/${multiarch}/"
+
 # Export stage: `--output type=tar` (or type=local) copies this filesystem to the host.
 FROM scratch AS artifact
 COPY --from=build /out /
